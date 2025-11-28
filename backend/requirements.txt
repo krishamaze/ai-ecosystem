@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pydantic
+supabase
+httpx
+python-dotenv
+python-telegram-bot>=21.0
+mem0ai
+
