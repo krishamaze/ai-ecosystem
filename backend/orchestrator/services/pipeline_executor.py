@@ -11,6 +11,7 @@ Features:
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 import uuid
+import json
 
 from .agent_dependencies import validate_agent_can_call, run_dependency_health_check
 from .supabase_client import supabase
@@ -20,6 +21,8 @@ from ..agents.base_agent import AgentResponse
 
 class PipelineExecutor:
     """Execute multi-agent pipelines with dependency validation."""
+    
+    MAX_RETRIES = 3
     
     def __init__(self):
         self.runner = AgentRunner()
@@ -50,6 +53,156 @@ class PipelineExecutor:
         
         return {"valid": True, "steps": steps}
     
+    def execute_creation_pipeline(self, initial_request: str, task_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Execute the Creation Council pipeline with correction loop.
+        
+        Flow:
+        1. Spec Designer (Design)
+        2. Guardian Minister (Safety Check)
+        3. Validator Minister (Structure Check)
+        
+        If ministers block/reject, loop back to Spec Designer with error context.
+        Max Retries: 3
+        """
+        pipeline_id = str(uuid.uuid4())[:8]
+        if not task_id:
+            task_id = f"creation-{pipeline_id}"
+            
+        current_request = initial_request
+        error_context = ""
+        retries = 0
+        
+        while retries <= self.MAX_RETRIES:
+            print(f"DEBUG: Creation Loop Attempt {retries + 1}/{self.MAX_RETRIES + 1}")
+            
+            # --- Step 1: Spec Designer ---
+            designer_input = {
+                "request": current_request,
+                "context": error_context
+            }
+            
+            designer_resp = self._run_step(
+                task_id, pipeline_id, "spec_designer", 
+                designer_input, step_num=1 + (retries * 3)
+            )
+            
+            if designer_resp["status"] != "success":
+                return self._fail_pipeline(pipeline_id, "Spec Designer failed", designer_resp)
+            
+            designer_output = designer_resp["output"]
+            mode = designer_output.get("mode")
+            
+            # If INTERVIEW mode, we stop and ask user (in a real system). 
+            # For this pipeline, we treat it as a "success" but requiring user input, 
+            # so we might return the question. 
+            # The prompt says "If approved, return result". 
+            # If INTERVIEW, it's not approved yet, but it's a valid stop state.
+            if mode == "INTERVIEW":
+                return {
+                    "pipeline_id": pipeline_id,
+                    "status": "clarification_needed",
+                    "output": designer_output,
+                    "retries": retries
+                }
+            
+            spec = designer_output.get("spec", {})
+            
+            # --- Step 2: Guardian Minister ---
+            # Check the generated spec for dangerous patterns
+            guardian_input = {
+                "content": json.dumps(spec),
+                "context": "output" # Strict checking
+            }
+            
+            guardian_resp = self._run_step(
+                task_id, pipeline_id, "guardian_minister", 
+                guardian_input, step_num=2 + (retries * 3)
+            )
+            
+            guardian_output = guardian_resp["output"] or {}
+            if guardian_output.get("verdict") == "BLOCKED":
+                error_context = f"Guardian Blocked: {guardian_output.get('violation_type')} - {guardian_output.get('reason')}"
+                retries += 1
+                continue # Loop back
+            
+            # --- Step 3: Validator Minister ---
+            validator_input = {
+                "spec": spec
+            }
+            
+            validator_resp = self._run_step(
+                task_id, pipeline_id, "validator_minister", 
+                validator_input, step_num=3 + (retries * 3)
+            )
+            
+            validator_output = validator_resp["output"] or {}
+            if validator_output.get("verdict") == "INVALID":
+                issues = "; ".join(validator_output.get("issues", []))
+                error_context = f"Validator Rejected: {issues}"
+                retries += 1
+                continue # Loop back
+
+            # --- Success ---
+            return {
+                "pipeline_id": pipeline_id,
+                "status": "success",
+                "final_spec": spec,
+                "retries": retries
+            }
+            
+        # --- Max Retries Exceeded ---
+        return {
+            "pipeline_id": pipeline_id,
+            "status": "failed",
+            "error": "Max retries exceeded",
+            "last_error_context": error_context,
+            "retries": retries
+        }
+
+    def _run_step(self, task_id: str, pipeline_id: str, role: str, input_data: Dict, step_num: int) -> Dict:
+        """Helper to run a single step and record telemetry."""
+        try:
+            response = self.runner.run(role, input_data)
+            output = response.output or {}
+            
+            success = response.status == "success"
+            
+            self._record_step_telemetry(
+                task_id=task_id,
+                pipeline_id=pipeline_id,
+                agent_role=role,
+                step=step_num,
+                success=success,
+                output=output,
+                error=str(response.error) if response.error else None
+            )
+            
+            return {
+                "status": response.status,
+                "output": output,
+                "error": response.error
+            }
+        except Exception as e:
+            self._record_step_telemetry(
+                task_id=task_id,
+                pipeline_id=pipeline_id,
+                agent_role=role,
+                step=step_num,
+                success=False,
+                error=str(e)
+            )
+            return {"status": "error", "error": str(e), "output": {}}
+
+    def _fail_pipeline(self, pipeline_id: str, reason: str, details: Dict) -> Dict:
+        """Helper to construct failure response."""
+        return {
+            "pipeline_id": pipeline_id,
+            "status": "failed",
+            "error": reason,
+            "details": details
+        }
+
     def execute(
         self,
         pipeline_name: str,
@@ -210,14 +363,14 @@ class PipelineExecutor:
                 "success": success,
                 "confidence_final": output.get("confidence") if output else None,
                 "failure_reason": error,
-                "human_feedback": f"pipeline:{pipeline_id}:step:{step}",
-                "memory_used": memory_used,
-                "memory_sources": memory_sources,
-                "rag_enabled": rag_enabled,
-                "rag_query": rag_query,
-                "rag_source_count": rag_source_count,
+                "human_feedback": None,
+                # "memory_used": memory_used,
+                # "memory_sources": memory_sources,
+                # "rag_enabled": rag_enabled,
+                # "rag_query": rag_query,
+                # "rag_source_count": rag_source_count,
             }
             supabase.table("task_telemetry").insert(record).execute()
-        except Exception:
+        except Exception as e:
+            print(f"TELEMETRY ERROR: {e}")
             pass  # Don't fail pipeline on telemetry error
-

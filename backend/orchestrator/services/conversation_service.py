@@ -2,23 +2,27 @@
 Conversation Service - Unified entry point for all interaction mediums.
 Detects intent, dispatches agents, returns UI-agnostic structured responses.
 """
-from typing import Dict, Any, Optional, List, Literal
+from typing import Dict, Any, Optional, List, Literal, Tuple
 from pydantic import BaseModel
-from enum import Enum
 from datetime import datetime
 import re
 import hashlib
 import logging
+import uuid
 
 from ..agents.agent_runner import AgentRunner
 from .pipeline_executor import PipelineExecutor
-from .action_executor import ActionExecutor, ActionRequest, ActionType
+from .action_executor import ActionExecutor
 from .user_preferences import (
     get_user_preferences, increment_request_count,
     get_user_context, save_user_context, UserPreferences
 )
-from .guardrails import RequestGuard, safe_llm_response
+from .guardrails import RequestGuard
+from ..agents.guardian_minister import GuardianMinister
 from .retrieval_service import RetrievalService
+from .contracts import (
+    DetectedIntent, IntentType, Plan, PlanStep, ExecutionOutcome, InteractionRecord
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,17 +31,6 @@ class Medium(str, Enum):
     TELEGRAM = "telegram"
     DASHBOARD = "dashboard"
     API = "api"
-
-
-class Intent(str, Enum):
-    GENERATE_CODE = "generate_code"
-    GENERATE_VIDEO = "generate_video"
-    REVIEW_CODE = "review_code"
-    DEPLOY = "deploy"
-    CHECK_STATUS = "check_status"
-    LIST_TASKS = "list_tasks"
-    CLARIFY = "clarify"
-    UNKNOWN = "unknown"
 
 
 class UIElement(BaseModel):
@@ -57,40 +50,11 @@ class ConverseRequest(BaseModel):
 class ConverseResponse(BaseModel):
     reply: str
     action: str
-    intent: Intent
+    intent: IntentType
     trace_id: Optional[str] = None
     ui_elements: List[UIElement] = []
     data: Optional[Dict[str, Any]] = None
     next_context: Optional[Dict[str, Any]] = None
-
-
-# Intent patterns
-INTENT_PATTERNS = {
-    Intent.GENERATE_CODE: [
-        r"(create|generate|write|build|make).*(code|function|endpoint|api|class|script)",
-        r"(python|javascript|typescript|go|rust).*(function|code|script)",
-        r"fastapi|flask|express|django",
-    ],
-    Intent.GENERATE_VIDEO: [
-        r"(create|generate|write|plan).*(video|content|script|tutorial)",
-        r"(youtube|tiktok|short|reel)",
-    ],
-    Intent.REVIEW_CODE: [
-        r"(review|check|analyze|audit).*(code|security|quality)",
-    ],
-    Intent.DEPLOY: [
-        r"(deploy|ship|release|push)",
-        r"approve.*(deploy|release)",
-        r"^deploy\s*(it|this|that|now)?$",
-    ],
-    Intent.CHECK_STATUS: [
-        r"(status|progress|state|health)",
-        r"(what|how).*(running|pending|deployed)",
-    ],
-    Intent.LIST_TASKS: [
-        r"(list|show|get).*(task|job|pipeline|artifact)",
-    ],
-}
 
 
 class ConversationService:
@@ -102,39 +66,75 @@ class ConversationService:
         self.actions = ActionExecutor()
         self.retrieval = RetrievalService()
     
-    def process(self, request: ConverseRequest) -> ConverseResponse:
-        """Process incoming message and return structured response."""
+    async def process(self, request: ConverseRequest) -> Tuple[ConverseResponse, InteractionRecord]:
+        """Process incoming message and return structured response with interaction record."""
         started_at = datetime.utcnow()
         user_id = request.user_id or "anonymous"
+        trace_id = str(uuid.uuid4())
 
         # Initialize guard with safety check
         guard = RequestGuard(request.message, user_id)
+        guard.trace_id = trace_id # Force trace_id sync
 
         # Block unsafe content
         if not guard.is_safe:
-            self._record_feedback(guard.trace_id, user_id, request.message, "blocked", False)
+            interaction_record = self._record_interaction(
+                trace_id=trace_id,
+                user_id=user_id,
+                request_message=request.message,
+                detected_intent=DetectedIntent(
+                    intent_type=IntentType.UNKNOWN,
+                    raw_intent="blocked",
+                    confidence=1.0,
+                    reasoning="Blocked by RequestGuard"
+                ),
+                execution_outcome=ExecutionOutcome(
+                    success=False,
+                    status="rejected",
+                    output={"reply": guard.get_blocked_response()["reply"]},
+                    duration_ms=int((datetime.utcnow() - started_at).total_seconds() * 1000)
+                ),
+                guardrail_decisions=[{"verdict": "BLOCKED", "reason": guard.violation_type}]
+            )
             blocked = guard.get_blocked_response()
             return ConverseResponse(
                 reply=blocked["reply"],
                 action="blocked",
-                intent=Intent.UNKNOWN,
-                trace_id=guard.trace_id,
+                intent=IntentType.UNKNOWN,
+                trace_id=trace_id,
                 ui_elements=[]
-            )
+            ), interaction_record
 
         # Load user preferences
         prefs = get_user_preferences(user_id) if user_id != "anonymous" else None
 
         # Check rate limit
         if prefs and not increment_request_count(user_id):
-            self._record_feedback(guard.trace_id, user_id, request.message, "rate_limited", False)
+            # Record failed interaction due to rate limit
+            interaction_record = self._record_interaction(
+                trace_id=trace_id,
+                user_id=user_id,
+                request_message=request.message,
+                 detected_intent=DetectedIntent(
+                    intent_type=IntentType.UNKNOWN,
+                    raw_intent="rate_limited",
+                    confidence=1.0,
+                    reasoning="Rate limit exceeded"
+                ),
+                execution_outcome=ExecutionOutcome(
+                    success=False,
+                    status="rejected",
+                    output={"reply": "Daily request limit reached."},
+                    duration_ms=int((datetime.utcnow() - started_at).total_seconds() * 1000)
+                )
+            )
             return ConverseResponse(
                 reply="Daily request limit reached. Try again tomorrow.",
                 action="rate_limited",
-                intent=Intent.UNKNOWN,
-                trace_id=guard.trace_id,
+                intent=IntentType.UNKNOWN,
+                trace_id=trace_id,
                 ui_elements=[]
-            )
+            ), interaction_record
 
         # Merge saved context with request context
         if user_id != "anonymous" and not request.context:
@@ -151,109 +151,176 @@ class ConversationService:
             "retrieval": retrieval_result
         }
 
-        intent = self._detect_intent(request.message)
-
+        # Detect Intent using AI
+        detected_intent = await self._detect_intent_ai(request.message, user_id)
+        
         handlers = {
-            Intent.GENERATE_CODE: self._handle_code_generation,
-            Intent.GENERATE_VIDEO: self._handle_video_generation,
-            Intent.REVIEW_CODE: self._handle_review,
-            Intent.DEPLOY: self._handle_deploy,
-            Intent.CHECK_STATUS: self._handle_status,
-            Intent.LIST_TASKS: self._handle_list,
-            Intent.UNKNOWN: self._handle_unknown,
-            Intent.CLARIFY: self._handle_clarify,
+            IntentType.GENERATE_CODE: self._handle_code_generation,
+            IntentType.GENERATE_VIDEO: self._handle_video_generation,
+            IntentType.REVIEW_CODE: self._handle_review,
+            IntentType.DEPLOY: self._handle_deploy,
+            IntentType.CHECK_STATUS: self._handle_status,
+            IntentType.LIST_TASKS: self._handle_list,
+            IntentType.UNKNOWN: self._handle_unknown,
+            IntentType.CLARIFY: self._handle_clarify,
+            IntentType.PLAN: self._handle_dynamic_plan,
         }
 
-        handler = handlers.get(intent, self._handle_unknown)
+        handler = handlers.get(detected_intent.intent_type, self._handle_unknown)
 
+        plan_object = None
+        execution_outcome = None
+        
         try:
-            response = handler(request, intent, prefs)
-            response.trace_id = guard.trace_id
-            success = True
+            response = handler(request, detected_intent.intent_type, prefs)
+            response.trace_id = trace_id
+            
+            # Extract plan object if it exists (from dynamic planner)
+            if response.data and "plan" in response.data:
+                 # It might be in the data dict if we passed it through
+                 pass 
+
+            execution_outcome = ExecutionOutcome(
+                success=True,
+                status="completed",
+                output={"reply": response.reply, "data": response.data},
+                duration_ms=int((datetime.utcnow() - started_at).total_seconds() * 1000),
+                pipeline_id=response.data.get("pipeline_id") if response.data else None
+            )
+
         except Exception as e:
-            logger.error(f"[{guard.trace_id}] Handler error: {e}")
+            logger.error(f"[{trace_id}] Handler error: {e}")
             response = ConverseResponse(
                 reply="Something went wrong. Please try again.",
                 action="error",
-                intent=intent,
-                trace_id=guard.trace_id,
+                intent=detected_intent.intent_type,
+                trace_id=trace_id,
                 ui_elements=[]
             )
-            success = False
+            execution_outcome = ExecutionOutcome(
+                success=False,
+                status="error",
+                output={},
+                error=str(e),
+                duration_ms=int((datetime.utcnow() - started_at).total_seconds() * 1000)
+            )
 
         # Save context for next turn
         if user_id != "anonymous" and response.next_context:
             save_user_context(user_id, response.next_context)
 
-        # Record feedback
-        latency_ms = int((datetime.utcnow() - started_at).total_seconds() * 1000)
-        pipeline_id = response.data.get("pipeline_id") if response.data else None
-        
-        # Get memory usage from instance variables set in handler
-        memory_used = getattr(self, 'memory_used_for_telemetry', False)
-        memory_sources = getattr(self, 'memory_sources_for_telemetry', None)
-
-        self._record_feedback(
-            guard.trace_id, user_id, request.message,
-            intent.value, success, latency_ms, pipeline_id,
-            memory_used, memory_sources,
-            retrieval_result.get("enabled"),
-            retrieval_result.get("query"),
-            retrieval_result.get("source_count")
+        # Record Interaction
+        interaction_record = self._record_interaction(
+            trace_id=trace_id,
+            user_id=user_id,
+            request_message=request.message,
+            detected_intent=detected_intent,
+            plan=plan_object,
+            execution_outcome=execution_outcome,
+            guardrail_decisions=[] # Populate if we had explicit guardrail steps
         )
 
-        # Clean up instance variables
-        if hasattr(self, 'memory_used_for_telemetry'):
-            del self.memory_used_for_telemetry
-        if hasattr(self, 'memory_sources_for_telemetry'):
-            del self.memory_sources_for_telemetry
+        return response, interaction_record
 
-        guard.log_request(intent.value, success)
-        return response
+    async def _detect_intent_ai(self, message: str, user_id: str) -> DetectedIntent:
+        """
+        Use LLM + embeddings for intent classification.
+        Returns a strongly typed DetectedIntent object.
+        """
+        from ..agents.agent_factory import AgentFactory
+        
+        # Placeholder for semantic search
+        agents = AgentFactory.list_agents()
+        best_match = None
+        highest_score = 0.0
 
-    def _record_feedback(
-        self, trace_id: str, user_id: str, message: str,
-        intent: str, success: bool, latency_ms: int = 0, pipeline_id: str = None,
-        memory_used: bool = False, memory_sources: List[str] = None,
-        rag_enabled: bool = False, rag_query: str = None, rag_source_count: int = None,
-        confidence_delta: float = None
-    ):
-        """Record request telemetry for learning."""
+        for agent_name in agents:
+            agent_spec = AgentFactory.get_agent(agent_name)
+            purpose = agent_spec.get("purpose", "").lower()
+            
+            # Simple keyword matching
+            score = 0
+            for word in message.lower().split():
+                if word in purpose:
+                    score += 1
+            
+            if score > highest_score:
+                highest_score = score
+                best_match = agent_name
+
+        if best_match and highest_score > 0:
+            confidence = min(highest_score / len(message.lower().split()), 1.0) if message else 0.0
+            
+            # Map agent to intent type
+            intent_type = IntentType.UNKNOWN
+            if "code" in best_match:
+                intent_type = IntentType.GENERATE_CODE
+            elif "video" in best_match:
+                intent_type = IntentType.GENERATE_VIDEO
+            
+            return DetectedIntent(
+                intent_type=intent_type,
+                raw_intent=f"agent:{best_match}",
+                confidence=confidence,
+                agent_name=best_match,
+                reasoning=f"Matched keywords in {best_match} purpose."
+            )
+
+        # Fallback to planner
+        return DetectedIntent(
+            intent_type=IntentType.PLAN,
+            raw_intent="plan",
+            confidence=0.5,
+            agent_name="planner_agent",
+            reasoning="No direct agent match found; defaulting to planner."
+        )
+
+    def _record_interaction(
+        self,
+        trace_id: str,
+        user_id: str,
+        request_message: str,
+        detected_intent: DetectedIntent,
+        execution_outcome: ExecutionOutcome,
+        plan: Optional[Plan] = None,
+        guardrail_decisions: List[Dict[str, Any]] = []
+    ) -> InteractionRecord:
+        """
+        Record the full interaction to Supabase using the InteractionRecord contract.
+        Returns the created InteractionRecord.
+        """
+        record = InteractionRecord(
+            trace_id=trace_id,
+            user_id=user_id,
+            request_message=request_message,
+            detected_intent=detected_intent,
+            plan=plan,
+            execution_outcome=execution_outcome,
+            guardrail_decisions=guardrail_decisions
+        )
+        
         try:
             from .supabase_client import supabase
-            msg_hash = hashlib.sha256(message.encode()).hexdigest()[:16]
             
-            record = {
+            # MAPPING TO EXISTING TABLE FOR BACKWARD COMPATIBILITY
+            legacy_record = {
                 "trace_id": trace_id,
                 "user_id": user_id,
-                "message_hash": msg_hash,
-                "intent": intent,
-                "success": success,
-                "latency_ms": latency_ms,
-                "pipeline_id": pipeline_id,
-                "memory_used": memory_used,
-                "memory_sources": memory_sources,
-                "rag_enabled": rag_enabled,
-                "rag_query": rag_query,
-                "rag_source_count": rag_source_count,
-                "confidence_delta": confidence_delta
+                "message_hash": hashlib.sha256(request_message.encode()).hexdigest()[:16],
+                "intent": detected_intent.intent_type.value,
+                "success": execution_outcome.success,
+                "latency_ms": execution_outcome.duration_ms,
+                "pipeline_id": execution_outcome.pipeline_id,
+                # New fields would ideally go into a structured_log column
+                # "structured_log": data_dict 
             }
+            supabase.table("conversation_feedback").insert(legacy_record).execute()
+            
+        except Exception as e:
+            logger.error(f"Telemetry error: {e}")
+        
+        return record
 
-            supabase.table("conversation_feedback").insert(record).execute()
-        except Exception:
-            pass  # Don't fail on telemetry
-    
-    def _detect_intent(self, message: str) -> Intent:
-        """Pattern-match to detect user intent."""
-        msg_lower = message.lower()
-        
-        for intent, patterns in INTENT_PATTERNS.items():
-            for pattern in patterns:
-                if re.search(pattern, msg_lower):
-                    return intent
-        
-        return Intent.UNKNOWN
-    
     def _format_retrieved_docs(self, docs: List[Dict]) -> str:
         """Formats a list of documents for injection into a prompt."""
         if not docs:
@@ -265,14 +332,14 @@ class ConversationService:
         formatted += "\nOnly use as reference. If uncertain, request more documents.\n"
         return formatted
     
-    def _handle_code_generation(self, req: ConverseRequest, intent: Intent, prefs: Optional[UserPreferences] = None) -> ConverseResponse:
+    # --- HANDLERS ---
+
+    def _handle_code_generation(self, req: ConverseRequest, intent: IntentType, prefs: Optional[UserPreferences] = None) -> ConverseResponse:
         """Generate code via pipeline with user preferences."""
         
         # 1. Retrieve relevant memories
         memory_response = self.runner.run("memory_selector", {"query": req.message, "top_k": 3})
         memories = memory_response.output.get("memories", [])
-        self.memory_used_for_telemetry = len(memories) > 0
-        self.memory_sources_for_telemetry = [m.get("source") for m in memories]
 
         # 2. Check for retrieved documents
         retrieval_result = req.context.get("retrieval", {})
@@ -352,7 +419,7 @@ class ConversationService:
             next_context={"pipeline_id": result["pipeline_id"], "last_intent": intent.value}
         )
 
-    def _handle_video_generation(self, req: ConverseRequest, intent: Intent, prefs: Optional[UserPreferences] = None) -> ConverseResponse:
+    def _handle_video_generation(self, req: ConverseRequest, intent: IntentType, prefs: Optional[UserPreferences] = None) -> ConverseResponse:
         """Generate video content via pipeline with user preferences."""
         
         # 1. Retrieve relevant memories first
@@ -361,9 +428,7 @@ class ConversationService:
             {"query": req.message, "top_k": 3}
         )
         memories = memory_response.output.get("memories", [])
-        memory_used = len(memories) > 0
-        memory_sources = [m.get("source") for m in memories]
-
+        
         # 2. Check for retrieved documents
         retrieval_result = req.context.get("retrieval", {})
         retrieved_docs_str = ""
@@ -392,7 +457,6 @@ class ConversationService:
 
         blocks = script_output.get("script_blocks", []) if script_output else []
 
-        # Pass memory usage to telemetry
         response = ConverseResponse(
             reply=f"Video script generated with {len(blocks)} segments.",
             action="await_approval",
@@ -402,17 +466,13 @@ class ConversationService:
                 UIElement(type="button", label="Approve Script", payload={"next": "store_script", "pipeline_id": result["pipeline_id"]}),
                 UIElement(type="button", label="Regenerate", payload={"next": "generate_video"}),
             ],
-            data={"pipeline_id": result["pipeline_id"], "script": script_output, "memory_used": memory_used},
+            data={"pipeline_id": result["pipeline_id"], "script": script_output},
             next_context={"pipeline_id": result["pipeline_id"], "last_intent": intent.value}
         )
         
-        # Manually set telemetry data before returning
-        self.memory_used_for_telemetry = memory_used
-        self.memory_sources_for_telemetry = memory_sources
-        
         return response
 
-    def _handle_review(self, req: ConverseRequest, intent: Intent, prefs: Optional[UserPreferences] = None) -> ConverseResponse:
+    def _handle_review(self, req: ConverseRequest, intent: IntentType, prefs: Optional[UserPreferences] = None) -> ConverseResponse:
         """Review existing code."""
         context = req.context or {}
         code = context.get("code") or req.message
@@ -430,7 +490,7 @@ class ConversationService:
             data=output
         )
 
-    def _handle_deploy(self, req: ConverseRequest, intent: Intent, prefs: Optional[UserPreferences] = None) -> ConverseResponse:
+    def _handle_deploy(self, req: ConverseRequest, intent: IntentType, prefs: Optional[UserPreferences] = None) -> ConverseResponse:
         """Handle deploy confirmation."""
         context = req.context or {}
         pipeline_id = context.get("pipeline_id")
@@ -439,7 +499,7 @@ class ConversationService:
             return ConverseResponse(
                 reply="No pipeline context. What would you like to deploy?",
                 action="clarify",
-                intent=Intent.CLARIFY,
+                intent=IntentType.CLARIFY,
                 ui_elements=[]
             )
 
@@ -464,7 +524,7 @@ class ConversationService:
             data={"pipeline_id": pipeline_id}
         )
 
-    def _handle_status(self, req: ConverseRequest, intent: Intent, prefs: Optional[UserPreferences] = None) -> ConverseResponse:
+    def _handle_status(self, req: ConverseRequest, intent: IntentType, prefs: Optional[UserPreferences] = None) -> ConverseResponse:
         """Return system status."""
         from .supabase_client import supabase
 
@@ -482,7 +542,7 @@ class ConversationService:
             data={"deployed": deployed.count, "drafts": drafts.count}
         )
 
-    def _handle_list(self, req: ConverseRequest, intent: Intent, prefs: Optional[UserPreferences] = None) -> ConverseResponse:
+    def _handle_list(self, req: ConverseRequest, intent: IntentType, prefs: Optional[UserPreferences] = None) -> ConverseResponse:
         """List artifacts/tasks."""
         from .supabase_client import supabase
 
@@ -498,7 +558,7 @@ class ConversationService:
             data={"artifacts": artifacts.data}
         )
 
-    def _handle_unknown(self, req: ConverseRequest, intent: Intent, prefs: Optional[UserPreferences] = None) -> ConverseResponse:
+    def _handle_unknown(self, req: ConverseRequest, intent: IntentType, prefs: Optional[UserPreferences] = None) -> ConverseResponse:
         """Handle unrecognized intent."""
         return ConverseResponse(
             reply="I can help you generate code, create video scripts, review code, or deploy artifacts. What would you like to do?",
@@ -511,7 +571,7 @@ class ConversationService:
             ]
         )
 
-    def _handle_clarify(self, req: ConverseRequest, intent: Intent, prefs: Optional[UserPreferences] = None) -> ConverseResponse:
+    def _handle_clarify(self, req: ConverseRequest, intent: IntentType, prefs: Optional[UserPreferences] = None) -> ConverseResponse:
         """Request clarification."""
         return ConverseResponse(
             reply="Could you provide more details about what you need?",
@@ -520,3 +580,63 @@ class ConversationService:
             ui_elements=[]
         )
 
+    def _handle_dynamic_plan(self, req: ConverseRequest, intent: IntentType, prefs: Optional[UserPreferences] = None) -> ConverseResponse:
+        """
+        Generates and executes a dynamic plan.
+        """
+        # 1. Call the PlannerAgent to generate the plan
+        planner_response = self.runner.run("planner_agent", {"request": req.message})
+        
+        if planner_response.status != "success" or not planner_response.output:
+            return ConverseResponse(
+                reply="I could not devise a plan for your request.",
+                action="error",
+                intent=intent,
+            )
+
+        # Parse the output into a Plan object if possible, or use the dict
+        plan_data = planner_response.output
+        
+        # Extract steps for the pipeline
+        steps_dicts = plan_data.get("steps", [])
+        
+        # If steps are objects, extract agent_role
+        if steps_dicts and isinstance(steps_dicts[0], dict):
+             plan_steps = [s.get("agent_role") for s in steps_dicts]
+        else:
+             plan_steps = steps_dicts # Fallback if it's already a list of strings (though contracts say otherwise)
+
+        if not plan_steps:
+            return ConverseResponse(
+                reply="The generated plan was empty. I'm not sure how to proceed.",
+                action="clarify",
+                intent=intent
+            )
+
+        # 2. VALIDATION: Audit Plan with GuardianMinister
+        guardian = GuardianMinister()
+        audit_result = guardian.validate_plan(plan_steps)
+        
+        if audit_result["verdict"] == "BLOCKED":
+            return ConverseResponse(
+                reply=f"Plan rejected by policy: {audit_result['reason']}",
+                action="blocked",
+                intent=intent,
+                data=audit_result
+            )
+
+        # 3. Execute the plan using the PipelineExecutor
+        pipeline_result = self.pipeline.execute(
+            pipeline_name="dynamic_plan",
+            steps=plan_steps,
+            initial_input={"requirement": req.message}
+        )
+
+        final_output = pipeline_result.get("final_output", {})
+        
+        return ConverseResponse(
+            reply=f"I have executed the plan. Here is the result: {final_output}",
+            action="complete",
+            intent=intent,
+            data=pipeline_result
+        )

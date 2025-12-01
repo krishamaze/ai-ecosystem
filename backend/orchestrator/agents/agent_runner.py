@@ -3,10 +3,60 @@ from typing import Optional, Dict, Any
 from .agent_factory import AgentFactory
 from .base_agent import AgentResponse
 from ..services.gemini import call_gemini
+from .guardian_minister import GuardianMinister
+from .validator_minister import ValidatorMinister
+from .audit_minister import AuditMinister
+from .spec_designer import SpecDesignerAgent
 
 
 class AgentRunner:
     def run(self, role: str, input_data: dict) -> AgentResponse:
+        print(f"DEBUG: AgentRunner.run role={role} input={input_data}")
+        # --- Deterministic Ministers (Phase 1) & Special Agents ---
+        if role == "spec_designer":
+            agent = SpecDesignerAgent()
+            return agent.run(input_data)
+
+        if role == "guardian_minister":
+            content = input_data.get("code") or input_data.get("content") or input_data.get("input", "")
+            context = input_data.get("context", "code")
+            minister = GuardianMinister(str(content), context=context)
+            decision = minister.get_decision()
+            return AgentResponse(
+                agent=role,
+                status="success",
+                output=decision,
+                confidence=1.0,
+                needs_clarification=False
+            )
+            
+        if role == "validator_minister":
+            spec = input_data.get("spec") or input_data
+            minister = ValidatorMinister()
+            decision = minister.validate_spec(spec)
+            return AgentResponse(
+                agent=role,
+                status="success",
+                output=decision,
+                confidence=1.0,
+                needs_clarification=False
+            )
+            
+        if role == "audit_minister":
+            minister = AuditMinister()
+            if "telemetry" in input_data or "failure_rate" in input_data:
+                decision = minister.audit_telemetry(input_data)
+            else:
+                decision = minister.audit_spec(input_data)
+            return AgentResponse(
+                agent=role,
+                status="success",
+                output=decision,
+                confidence=1.0,
+                needs_clarification=False
+            )
+        # -----------------------------------------
+
         prompt = AgentFactory.generate_prompt(input_data, role)
 
         try:

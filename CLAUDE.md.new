@@ -1,0 +1,32 @@
+# CLAUDE.md - AI Ecosystem Platform Guide
+
+**Last Updated:** 2025-12-01
+
+> Comprehensive reference guide for AI assistants working on the AI Ecosystem codebase. This platform orchestrates intelligent agents with DNA-based evolution, telemetry-driven optimization, and multi-channel interaction.
+
+---
+
+## Table of Contents
+
+1. [Project Overview & Quick Start](#1-project-overview--quick-start)
+2. [Agent Architecture](#2-agent-architecture-critical)
+3. [Agent Dependencies & Validation](#3-agent-dependencies--validation-critical)
+4. [DNA Mutation System](#4-dna-mutation-system)
+5. [Pipeline Execution](#5-pipeline-execution)
+6. [Conversation Service](#6-conversation-service)
+7. [Memory System (Mem0)](#7-memory-system-mem0)
+8. [RAG (Retrieval) System](#8-rag-retrieval-system)
+9. [Telemetry & Analytics](#9-telemetry--analytics)
+10. [Security & Guardrails](#10-security--guardrails)
+11. [Database Schema](#11-database-schema)
+12. [Frontend Integration](#12-frontend-integration)
+13. [Testing Strategy](#13-testing-strategy)
+14. [Evaluation Framework](#14-evaluation-framework)
+15. [Common Workflows](#15-common-workflows)
+16. [Coding Conventions](#16-coding-conventions)
+17. [Environment Configuration](#17-environment-configuration)
+18. [Critical Gotchas & Warnings](#18-critical-gotchas--warnings)
+19. [File Reference Guide](#19-file-reference-guide)
+20. [Key Design Patterns](#20-key-design-patterns)
+21. [Deployment Guide](#21-deployment-guide)
+

@@ -93,7 +93,7 @@ def record_telemetry(data: TelemetryInput):
 
 @router.post("/audit")
 def run_audit(days: int = 7):
-    """Run agent_auditor on recent telemetry."""
+    """Run audit_minister on recent telemetry."""
     end_time = datetime.utcnow()
     start_time = end_time - timedelta(days=days)
     
@@ -119,7 +119,7 @@ def run_audit(days: int = 7):
         "agent_runs": runs.data or []
     }
     
-    response = runner.run("agent_auditor", audit_input)
+    response = runner.run("audit_minister", audit_input)
     
     if response.status != "success":
         return {"status": "error", "error": response.error}
@@ -551,7 +551,7 @@ class ConverseRequestAPI(BaseModel):
 
 
 @router.post("/converse")
-def converse(request: ConverseRequestAPI):
+async def converse(request: ConverseRequestAPI):
     """
     Unified conversation endpoint for all interaction mediums.
 
@@ -573,7 +573,7 @@ def converse(request: ConverseRequestAPI):
         user_id=request.user_id
     )
 
-    response = conversation_service.process(converse_request)
+    response, interaction_record = await conversation_service.process(converse_request)
 
     return {
         "reply": response.reply,
@@ -746,8 +746,8 @@ def get_success_rates():
     result = supabase.rpc("exec_sql", {
         "query": """
             SELECT intent, COUNT(*) as total,
-                   SUM(CASE WHEN success THEN 1 ELSE 0 END) as successful,
-                   ROUND(100.0 * SUM(CASE WHEN success THEN 1 ELSE 0 END) / COUNT(*), 2) as rate
+            SUM(CASE WHEN success THEN 1 ELSE 0 END) as successful,
+            ROUND(100.0 * SUM(CASE WHEN success THEN 1 ELSE 0 END) / COUNT(*), 2) as rate
             FROM conversation_feedback
             WHERE created_at > now() - interval '7 days'
             GROUP BY intent ORDER BY total DESC

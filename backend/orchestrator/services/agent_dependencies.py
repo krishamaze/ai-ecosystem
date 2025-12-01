@@ -25,8 +25,17 @@ AGENT_DEPENDENCIES: Dict[str, List[str]] = {
     "code_reviewer": [],                          # Reviewer is terminal (verdict)
 
     # Meta layer (can observe all agents)
-    "agent_auditor": ["video_planner", "script_writer", "code_writer", "code_reviewer"],
-    "meta_reasoner": ["agent_auditor"],           # Meta-reasoner reads from auditor only
+    "audit_minister": ["video_planner", "script_writer", "code_writer", "code_reviewer"],
+    "meta_reasoner": ["audit_minister"],          # Meta-reasoner reads from auditor only
+    
+    # Ministers (System Guardrails)
+    "guardian_minister": [],                      # Gatekeeper (no downstream)
+    "validator_minister": [],                     # Gatekeeper (no downstream)
+    
+    # Helpers (used internally or as tools)
+    "memory_selector": [],
+    "retriever_agent": [],
+    "planner_agent": [],
 }
 
 

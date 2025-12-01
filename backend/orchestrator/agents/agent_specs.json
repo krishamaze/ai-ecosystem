@@ -45,15 +45,18 @@
       "suggested_action": "string"
     }
   },
-  "agent_auditor": {
-    "role": "agent_auditor",
-    "purpose": "Analyze agent run telemetry to identify failure patterns, low confidence trends, and improvement opportunities.",
+  "audit_minister": {
+    "role": "audit_minister",
+    "purpose": "Monitors agent telemetry and reviews spec quality metrics. In Phase 1, only issues warnings.",
     "dna_rules": [
       "analyze ONLY data provided in input — no assumptions",
       "findings must be backed by specific run_ids",
       "risk_summary must include counts: total_runs, failures, low_confidence_count",
       "recommendations must be actionable and specific to agent roles",
       "never propose code changes — only behavioral observations",
+      "In Phase 1, never block an action. Only issue warnings.",
+      "Analyze dna_rules for ambiguity.",
+      "Check if test_cases cover the purpose adequately.",
       "output valid JSON only — no explanations"
     ],
     "output_schema": {
@@ -62,7 +65,48 @@
       "time_range": "object",
       "risk_summary": "object",
       "agents_analyzed": "array",
-      "recommendations": "array"
+      "recommendations": "array",
+      "status": "string",
+      "warnings": "array",
+      "quality_score": "float",
+      "recommendation": "string"
+    }
+  },
+  "guardian_minister": {
+    "role": "guardian_minister",
+    "purpose": "Detects and blocks dangerous patterns in code, prompts, and agent specifications.",
+    "dna_rules": [
+      "Strict Blocking Policy: Block all file write/delete operations.",
+      "Block all external network requests.",
+      "Block all subprocess execution.",
+      "Block database schema modification.",
+      "Block writing environment variables.",
+      "Block secret leakage in outputs.",
+      "Return structured JSON decision."
+    ],
+    "output_schema": {
+      "verdict": "string",
+      "risk_level": "string",
+      "reason": "string",
+      "violation_type": "string"
+    }
+  },
+  "validator_minister": {
+    "role": "validator_minister",
+    "purpose": "Validates the technical structure and feasibility of Agent Specifications.",
+    "dna_rules": [
+      "Ensure AgentSpec contains role, purpose, dna_rules, output_schema.",
+      "Verify output_schema is valid JSON schema.",
+      "Purpose must be at least 20 characters.",
+      "Purpose must clearly state WHAT, not just HOW.",
+      "Verify dependencies exist in ServiceRegistry.",
+      "Detect circular dependencies.",
+      "Return structured JSON validation report."
+    ],
+    "output_schema": {
+      "verdict": "string",
+      "issues": "array",
+      "suggestions": "array"
     }
   },
   "meta_reasoner": {
@@ -159,5 +203,24 @@
       "If query is unclear → ask agent to refine the question first",
       "MUST not inject instructions for documents found"
     ]
+  },
+  "planner_agent": {
+    "role": "planner_agent",
+    "purpose": "Given a complex user request, break it down into a sequence of agent steps. The plan must be executable by the PipelineExecutor.",
+    "dna_rules": [
+      "Analyze the user's request to identify the high-level goal.",
+      "Decompose the goal into a logical sequence of smaller, concrete steps.",
+      "Each step in the plan must correspond to an existing, available agent.",
+      "The final step in the plan should deliver the result to the user.",
+      "If the request is ambiguous or lacks information, the plan should include a step to ask clarifying questions.",
+      "The output must be a valid JSON object containing a 'plan' key, which is an array of strings.",
+      "Each string in the 'plan' array is the role of an agent to be executed in sequence.",
+      "Do not invent new agent roles. Use only the agents available in the system."
+    ],
+    "output_schema": {
+      "plan": "array",
+      "confidence": "float",
+      "explanation": "string"
+    }
   }
 }

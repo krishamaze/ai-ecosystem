@@ -1,34 +1,16 @@
-from abc import ABC, abstractmethod
-from pydantic import BaseModel
-import json
+from pydantic import BaseModel, Field
+from typing import Optional, Dict, Any, List
 
-# DNA rules enforced for all agents
 class AgentResponse(BaseModel):
     agent: str
     status: str
-    output: dict | None = None
-    confidence: float | None = None
-    needs_clarification: bool | None = None
-    error: dict | None = None
+    output: Optional[Dict[str, Any]] = None
+    error: Optional[Dict[str, Any]] = None
+    confidence: float = 0.0
+    needs_clarification: bool = False
 
-class BaseAgent(ABC):
-    role: str
-
-    @abstractmethod
-    def run(self, input_data: dict) -> AgentResponse:
-        pass
-
-    def validate_response(self, response: dict) -> AgentResponse:
-        try:
-            validated = AgentResponse(**response)
-            return validated
-        except Exception as e:
-            return AgentResponse(
-                agent=self.role,
-                status="error",
-                error={"type": "INVALID_FORMAT", "details": str(e)},
-                confidence=0.0,
-                needs_clarification=True,
-                output=None
-            )
+class BaseAgent(BaseModel):
+    
+    def run(self, input_data: Dict[str, Any]) -> AgentResponse:
+        raise NotImplementedError("Each agent must implement the 'run' method.")
 
