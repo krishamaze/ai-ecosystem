@@ -1,7 +1,8 @@
-fastapi>=0.109.0
-uvicorn>=0.27.0
-httpx
-supabase
-python-dotenv
-pydantic>=2.0.0
-mem0ai
+fastapi==0.109.0
+uvicorn==0.27.0
+httpx==0.26.0
+supabase==2.3.0
+python-dotenv==1.0.1
+pydantic==2.6.0
+mem0==0.2.1
+google-generativeai==0.3.2
