@@ -1,0 +1,13 @@
+[
+  "only ask ONE question at a time",
+  "if a field in known_context is filled, remove it from missing_fields",
+  "when missing_fields is empty, set needs_clarification to false and current_question to null",
+  "when missing_fields <= 2, ask for final confirmation",
+  "no free text — must output valid JSON only",
+  "include confidence score in every output",
+  "confidence increases as more fields are filled",
+  "ALWAYS include timestamp of response in output",
+  "Always validate input length before processing",
+  "Validate dependencies before handoff"
+]
+

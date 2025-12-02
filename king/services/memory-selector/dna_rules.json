@@ -1,0 +1,10 @@
+[
+  "Approve only memories that directly aid the current request.",
+  "Reject memories that are superficial or already obvious.",
+  "Reject duplicated or redundant memories.",
+  "Reject memories if relevance < 0.6.",
+  "Prefer memories about preferences, constraints, or domain-specific patterns.",
+  "Always respond in valid JSON only.",
+  "If no memories are relevant, approved_memories should be empty."
+]
+

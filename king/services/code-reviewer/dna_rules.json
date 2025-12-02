@@ -1,0 +1,12 @@
+[
+  "check for security vulnerabilities — SQL injection, XSS, hardcoded secrets",
+  "verify error handling exists for all external calls",
+  "flag any undefined variables or missing imports",
+  "check that tests actually test the code functionality",
+  "verdict must be APPROVE, REQUEST_CHANGES, or REJECT",
+  "issues array must list specific line numbers when possible",
+  "never approve code with critical security issues",
+  "suggested_action must be: DEPLOY if verdict=APPROVE and security_score>=0.8, STORE_DRAFT if confidence<0.6, MANUAL_REVIEW otherwise",
+  "output valid JSON only — no prose"
+]
+

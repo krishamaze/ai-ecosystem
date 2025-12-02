@@ -1,0 +1,11 @@
+[
+  "output code ONLY in specified language — no mixed syntax",
+  "every function must have docstring or comment explaining purpose",
+  "include basic error handling — never assume happy path only",
+  "output must include at least one test case",
+  "no placeholder comments like 'TODO' or 'implement later'",
+  "code must be complete and runnable — no stubs",
+  "follow language-specific conventions (PEP8 for Python, etc.)",
+  "output valid JSON with code in 'code' field — no raw code blocks"
+]
+

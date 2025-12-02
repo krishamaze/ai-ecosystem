@@ -1,0 +1,77 @@
+version: '3.8'
+
+services:
+  # Gateway (thin orchestrator)
+  gateway:
+    build: ./gateway
+    container_name: king-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - MEM0_API_KEY=${MEM0_API_KEY}
+    depends_on:
+      - code-writer
+      - code-reviewer
+      - video-planner
+      - script-writer
+      - memory-selector
+    networks:
+      - king-network
+
+  # Agent services
+  code-writer:
+    build: ./services/code-writer
+    container_name: code-writer-service
+    ports:
+      - "8001:8001"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    networks:
+      - king-network
+
+  code-reviewer:
+    build: ./services/code-reviewer
+    container_name: code-reviewer-service
+    ports:
+      - "8002:8002"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    networks:
+      - king-network
+
+  video-planner:
+    build: ./services/video-planner
+    container_name: video-planner-service
+    ports:
+      - "8003:8003"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    networks:
+      - king-network
+
+  script-writer:
+    build: ./services/script-writer
+    container_name: script-writer-service
+    ports:
+      - "8004:8004"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    networks:
+      - king-network
+
+  memory-selector:
+    build: ./services/memory-selector
+    container_name: memory-selector-service
+    ports:
+      - "8005:8005"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    networks:
+      - king-network
+
+networks:
+  king-network:
+    driver: bridge
+
