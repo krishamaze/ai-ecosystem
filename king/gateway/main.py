@@ -8,7 +8,7 @@ from state_manager import StateManager
 from mem0 import MemoryClient
 import json
 from dataclasses import asdict
-from .memory import MemoryResolver
+from memory import MemoryResolver
 
 app = FastAPI(title="KING Gateway", version="1.2.0")
 state_manager = StateManager()
