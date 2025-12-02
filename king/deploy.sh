@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Configuration
-PROJECT_ID="your-project-id"
+PROJECT_ID="gen-lang-client-0695295266"
 REGION="us-central1"
 
 echo "👑 Deploying KING Stack to Google Cloud Run..."
