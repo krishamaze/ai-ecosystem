@@ -1,16 +1,20 @@
 -- Enhanced telemetry metrics for meaningful learning
 
--- Create enum for failure reasons
-create type failure_reason_type as enum ('formatting', 'factual', 'logic', 'performance', 'timeout', 'unknown');
+-- Create enum for failure reasons (idempotent)
+DO $$ BEGIN
+    CREATE TYPE failure_reason_type AS ENUM ('formatting', 'factual', 'logic', 'performance', 'timeout', 'unknown');
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
 
 -- Add structured metric columns to task_telemetry (dna_version already exists from init)
-alter table task_telemetry
-  add column human_override boolean default false,
-  add column failure_category failure_reason_type;
+ALTER TABLE task_telemetry
+ADD COLUMN IF NOT EXISTS human_override BOOLEAN DEFAULT FALSE,
+ADD COLUMN IF NOT EXISTS failure_category failure_reason_type;
 
 -- Create index for analytics queries
-create index idx_telemetry_agent_success on task_telemetry(agent_role, success);
-create index idx_telemetry_created on task_telemetry(created_at desc);
+CREATE INDEX IF NOT EXISTS idx_telemetry_agent_success ON task_telemetry(agent_role, success);
+CREATE INDEX IF NOT EXISTS idx_telemetry_created ON task_telemetry(created_at DESC);
 
 -- View for agent performance over time
 create or replace view agent_performance as

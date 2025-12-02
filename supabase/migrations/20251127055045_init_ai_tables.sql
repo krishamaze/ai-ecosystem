@@ -2,36 +2,36 @@
 -- Migration: init_ai_tables
 
 -- TASK master
-create table tasks (
-  id uuid primary key default gen_random_uuid(),
-  title text not null,
-  status text default 'planning',
-  created_at timestamptz default now()
+CREATE TABLE IF NOT EXISTS tasks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title TEXT NOT NULL,
+  status TEXT DEFAULT 'planning',
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- CONTEXT versioning
-create table task_context (
-  id uuid primary key default gen_random_uuid(),
-  task_id uuid references tasks(id) on delete cascade,
-  context_json jsonb not null,
-  version int default 1,
-  is_active boolean default true,
-  created_at timestamptz default now()
+CREATE TABLE IF NOT EXISTS task_context (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  task_id UUID REFERENCES tasks(id) ON DELETE CASCADE,
+  context_json JSONB NOT NULL,
+  version INT DEFAULT 1,
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- AGENT RUN LOG (full trace)
-create table agent_runs (
-  id uuid primary key default gen_random_uuid(),
-  task_id uuid references tasks(id) on delete cascade,
-  agent_role text not null,
-  input_json jsonb,
-  output_json jsonb,
-  confidence numeric,
-  created_at timestamptz default now()
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  task_id UUID REFERENCES tasks(id) ON DELETE CASCADE,
+  agent_role TEXT NOT NULL,
+  input_json JSONB,
+  output_json JSONB,
+  confidence NUMERIC,
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Indexes for performance
-create index idx_task_context_task_id on task_context(task_id);
-create index idx_task_context_active on task_context(task_id, is_active);
-create index idx_agent_runs_task_id on agent_runs(task_id);
-create index idx_agent_runs_role on agent_runs(agent_role);
+CREATE INDEX IF NOT EXISTS idx_task_context_task_id ON task_context(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_context_active ON task_context(task_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_task_id ON agent_runs(task_id);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_role ON agent_runs(agent_role);

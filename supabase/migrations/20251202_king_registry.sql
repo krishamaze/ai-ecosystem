@@ -3,7 +3,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- Table: agent_registry
 CREATE TABLE IF NOT EXISTS agent_registry (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     agent_name TEXT UNIQUE NOT NULL,
     service_url TEXT NOT NULL,
     status TEXT DEFAULT 'active',  -- active | disabled | maintenance
@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS agent_registry (
 
 -- Table: agent_specs
 CREATE TABLE IF NOT EXISTS agent_specs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     agent_name TEXT UNIQUE NOT NULL,
     purpose TEXT NOT NULL,
     dna_rules JSONB NOT NULL,  -- Array of rules
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS agent_specs (
 
 -- Table: agent_runs (ensure it exists or create if missing from previous migrations)
 CREATE TABLE IF NOT EXISTS agent_runs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     agent_name TEXT NOT NULL,
     input JSONB NOT NULL,
     output JSONB,
@@ -37,7 +37,17 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_name ON agent_runs(agent_name);
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'agent_runs' AND column_name = 'agent_name'
+    ) THEN
+        CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_name ON agent_runs(agent_name);
+    END IF;
+END $$;
+
 
 -- Seed data for agent_registry
 INSERT INTO agent_registry (agent_name, service_url) VALUES
