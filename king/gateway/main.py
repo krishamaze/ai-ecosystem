@@ -9,6 +9,8 @@ from mem0 import MemoryClient
 import json
 from dataclasses import asdict
 from memory import MemoryResolver
+from memory.reflection import reflect_on_run
+import asyncio
 
 app = FastAPI(title="KING Gateway", version="1.2.0")
 state_manager = StateManager()
@@ -152,6 +154,20 @@ async def execute_agent(agent_name: str, request: ExecuteRequest):
                 )
             except Exception as e:
                 print(f"Mem0 add failed for user {user_id}: {e}")
+
+        # 5. Self-Reflection (async, non-blocking)
+        asyncio.create_task(
+            reflect_on_run(
+                agent_name=agent_name,
+                input_data=request.input_data,
+                output_data=output or {},
+                success=success,
+                error=error_msg,
+                user_id=user_id,
+                user_feedback=request.input_data.get("feedback"),
+                duration_ms=duration_ms
+            )
+        )
 
     return output
 
