@@ -56,13 +56,20 @@ class MemoryResolver:
         # Override user_id/agent_id from filters if AI suggests (e.g. for cross-user search if allowed)
         # But for security, we usually respect the passed user_id or ensure the AI doesn't hallucinate access.
         # We will use the passed identifiers as primary, but allow keywords from AI.
+        
+        # SECURITY FIX: Always enforce the authenticated user_id. 
+        # Ignore any user_id suggested by the AI curator to prevent data leakage.
+        filters["user_id"] = user_id 
+        
         search_keywords = filters.get("keywords", [])
         search_query = f"{query} {' '.join(search_keywords)}" if search_keywords else query
 
         for tier_name in plan.get("tiers", []):
             try:
-                mem_type = MemoryType(tier_name)
+                # Normalize tier name to match enum values (lowercase)
+                mem_type = MemoryType(tier_name.lower())
             except ValueError:
+                logger.warning(f"Invalid memory tier suggested by curator: {tier_name}")
                 continue
 
             tier_memories = self._search_tier(

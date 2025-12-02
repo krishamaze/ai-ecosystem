@@ -1,4 +1,3 @@
-"""KING Memory System - Human-inspired hierarchical memory."""
 from .types import (
     Memory,
     MemoryType,
@@ -10,6 +9,7 @@ from .types import (
 from .seeding import get_collective_memories, get_lineage_memories
 from .decay import calculate_importance
 from .resolver import MemoryResolver
+from .curator import create_search_plan
 
 __all__ = [
     "Memory",
@@ -22,5 +22,5 @@ __all__ = [
     "get_lineage_memories",
     "calculate_importance",
     "MemoryResolver",
+    "create_search_plan",
 ]
-
