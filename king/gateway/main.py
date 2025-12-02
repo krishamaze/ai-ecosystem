@@ -88,8 +88,8 @@ async def execute_agent(agent_name: str, request: ExecuteRequest):
     if user_id and agent_name != "memory_selector":
         query = enriched_input.get("query") or str(enriched_input)
         
-        # Use the resolver for multi-tier search (synchronous call)
-        memory_results = memory_resolver.resolve(
+        # Use the resolver for multi-tier search (async call)
+        memory_results = await memory_resolver.resolve(
             query=query, 
             user_id=user_id, 
             agent_id=agent_name, 

@@ -1,24 +1,16 @@
 """
 KING Memory Resolver - Multi-tier memory search with inheritance chain.
-
-Resolution Order (like Python's MRO):
-1. working    - Current session
-2. episodic   - User+agent experiences  
-3. semantic   - Learned facts
-4. lineage    - Agent expertise
-5. collective - Kingdom DNA
+Uses AI Context Curator to determine search strategy.
 """
 import time
 import logging
 from typing import Optional, List, Dict, Any
-from datetime import datetime, timezone
-
 from .types import Memory, MemoryType, MemorySearchResult, MEMORY_RESOLUTION_ORDER
 from .seeding import get_collective_memories, get_lineage_memories
 from .decay import apply_decay_to_memories, filter_expired_memories
+from .curator import create_search_plan
 
 logger = logging.getLogger(__name__)
-
 
 class MemoryResolver:
     """
@@ -34,38 +26,53 @@ class MemoryResolver:
         self._collective_cache: Optional[List[Memory]] = None
         self._lineage_cache: Dict[str, List[Memory]] = {}
     
-    def resolve(
+    async def resolve(
         self,
         query: str,
         user_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         session_id: Optional[str] = None,
-        working_memories: Optional[List[Memory]] = None,
-        limit_per_tier: int = 5,
-        early_stop: bool = False
+        working_memories: Optional[List[Memory]] = None
     ) -> MemorySearchResult:
         """
-        Resolve memories across all tiers.
-        
-        Args:
-            query: Search query for semantic search
-            user_id: User ID for episodic/semantic search
-            agent_id: Agent ID for lineage memories
-            session_id: Session ID for working memories
-            working_memories: Pre-loaded working memories from session
-            limit_per_tier: Max memories per tier
-            early_stop: Stop if sufficient context found
-            
-        Returns:
-            MemorySearchResult with memories grouped by tier
+        Resolve memories using AI-generated plan.
         """
         start_time = time.time()
         result = MemorySearchResult()
         
-        for mem_type in MEMORY_RESOLUTION_ORDER:
+        # AI decides search strategy
+        plan = await create_search_plan(
+            query=query, 
+            user_id=user_id, 
+            agent_name=agent_id or "unknown",
+            session_context={"session_id": session_id}
+        )
+        
+        logger.info(f"Memory Search Plan: {plan.get('reasoning')}")
+        
+        limit_per_tier = plan.get("limit_per_tier", 5)
+        filters = plan.get("filters", {})
+        
+        # Override user_id/agent_id from filters if AI suggests (e.g. for cross-user search if allowed)
+        # But for security, we usually respect the passed user_id or ensure the AI doesn't hallucinate access.
+        # We will use the passed identifiers as primary, but allow keywords from AI.
+        search_keywords = filters.get("keywords", [])
+        search_query = f"{query} {' '.join(search_keywords)}" if search_keywords else query
+
+        for tier_name in plan.get("tiers", []):
+            try:
+                mem_type = MemoryType(tier_name)
+            except ValueError:
+                continue
+
             tier_memories = self._search_tier(
-                mem_type, query, user_id, agent_id, session_id,
-                working_memories, limit_per_tier
+                mem_type, 
+                search_query, 
+                user_id, 
+                agent_id, 
+                session_id,
+                working_memories, 
+                limit_per_tier
             )
             
             if tier_memories:
@@ -76,14 +83,11 @@ class MemoryResolver:
                 result.memories[mem_type] = tier_memories
                 result.total_count += len(tier_memories)
             
-            # Early stop if we have enough context
-            if early_stop and result.total_count >= 10:
-                logger.debug(f"Early stop at tier {mem_type.value} with {result.total_count} memories")
+            # Early stop if enough context found
+            if plan.get("early_stop") and result.total_count >= limit_per_tier * 2:
                 break
         
         result.search_time_ms = (time.time() - start_time) * 1000
-        logger.info(f"Memory resolution: {result.total_count} memories in {result.search_time_ms:.1f}ms")
-        
         return result
     
     def _search_tier(
@@ -147,6 +151,10 @@ class MemoryResolver:
             
             memories = []
             for r in results.get("results", []):
+                # Basic filter to ensure we respect the requested memory type if stored in metadata
+                # Note: Mem0 results usually don't strictly separate unless we use graph/custom filters.
+                # For MVP, we accept what Mem0 gives but label it requested type.
+                
                 mem = Memory(
                     content=r.get("memory", ""),
                     memory_type=mem_type,
@@ -163,4 +171,3 @@ class MemoryResolver:
         except Exception as e:
             logger.error(f"Mem0 search failed: {e}")
             return []
-
