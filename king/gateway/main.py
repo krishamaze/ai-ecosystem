@@ -7,17 +7,21 @@ from typing import Dict, Any, List, Optional
 from state_manager import StateManager
 from mem0 import MemoryClient
 import json
+from dataclasses import asdict
+from .memory import MemoryResolver
 
-app = FastAPI(title="KING Gateway", version="1.1.0")
+app = FastAPI(title="KING Gateway", version="1.2.0")
 state_manager = StateManager()
 
-# Initialize Mem0 client
+# Initialize Mem0 client and Memory Resolver
 mem0_api_key = os.getenv("MEM0_API_KEY")
 if not mem0_api_key:
     print("Warning: MEM0_API_KEY is not set. Memory functions will be disabled.")
     mem0_client = None
 else:
     mem0_client = MemoryClient(api_key=mem0_api_key)
+
+memory_resolver = MemoryResolver(mem0_client=mem0_client)
 
 class ExecuteRequest(BaseModel):
     agent_name: str
@@ -75,23 +79,30 @@ async def execute_agent(agent_name: str, request: ExecuteRequest):
     start_time = time.time()
     
     user_id = request.input_data.get("user_id")
+    session_id = request.input_data.get("session_id")
     enriched_input = request.input_data.copy()
 
-    # 1. Memory Enrichment Middleware
-    if user_id and agent_name != "memory_selector" and mem0_client:
+    # 1. Hierarchical Memory Search
+    if user_id and agent_name != "memory_selector":
         query = enriched_input.get("query") or str(enriched_input)
         
-        # Search for memories
-        try:
-            candidate_memories = mem0_client.search(query=query, user_id=user_id, limit=10)
-        except Exception as e:
-            candidate_memories = []
-            print(f"Mem0 search failed for user {user_id}: {e}")
+        # Use the resolver for multi-tier search (synchronous call)
+        memory_results = memory_resolver.resolve(
+            query=query, 
+            user_id=user_id, 
+            agent_id=agent_name, 
+            session_id=session_id
+        )
+        
+        candidate_memories = memory_results.get_all_flat()
         
         if candidate_memories:
             try:
                 # Run memory_selector service to filter
-                selector_input = {"query": query, "candidate_memories": candidate_memories}
+                selector_input = {
+                    "query": query, 
+                    "candidate_memories": [{"content": m.content, "importance": m.importance, "memory_type": m.memory_type.value} for m in candidate_memories] # Convert to dict compatible format
+                }
                 selection_result = await _call_agent_service("memory_selector", selector_input)
                 
                 # Inject approved memories into the context for the target agent
@@ -130,11 +141,15 @@ async def execute_agent(agent_name: str, request: ExecuteRequest):
             duration_ms=duration_ms
         )
         
-        # 4. Add result to Mem0
+        # 4. Add result to Mem0 (Episodic Memory)
         if user_id and success and mem0_client:
             try:
-                text_to_add = f"Interaction with '{agent_name}'. Output: {json.dumps(output)}"
-                mem0_client.add(text_to_add, user_id=user_id)
+                # Store structured episodic memory
+                mem0_client.add(
+                    f"Interaction with '{agent_name}'. Output: {json.dumps(output)}",
+                    user_id=user_id,
+                    metadata={"agent_id": agent_name, "category": "episodic"}
+                )
             except Exception as e:
                 print(f"Mem0 add failed for user {user_id}: {e}")
 
