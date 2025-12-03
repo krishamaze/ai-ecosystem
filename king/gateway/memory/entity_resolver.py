@@ -111,3 +111,43 @@ class EntityResolver:
         except Exception as e:
             logger.error(f"Error retrieving entity {entity_id}: {e}")
             return None
+
+    async def add_alias(self, entity_id: str, alias: str) -> bool:
+        """
+        Add an alias to an existing entity if not already present.
+        """
+        alias = alias.strip()
+        client = await self._get_client()
+        
+        try:
+            # 1. Fetch current aliases
+            res = await client.table("entities")\
+                .select("aliases")\
+                .eq("id", entity_id)\
+                .single()\
+                .execute()
+            
+            if not res.data:
+                logger.warning(f"Entity {entity_id} not found for adding alias")
+                return False
+                
+            current_aliases = res.data.get("aliases", [])
+            
+            # 2. Check if alias exists
+            if alias in current_aliases:
+                return True
+                
+            # 3. Update with new alias
+            new_aliases = current_aliases + [alias]
+            
+            await client.table("entities")\
+                .update({"aliases": new_aliases, "updated_at": "now()"})\
+                .eq("id", entity_id)\
+                .execute()
+                
+            logger.info(f"Added alias '{alias}' to entity {entity_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error adding alias '{alias}' to entity {entity_id}: {e}")
+            return False
