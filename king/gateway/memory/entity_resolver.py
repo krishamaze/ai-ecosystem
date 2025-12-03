@@ -13,12 +13,18 @@ class EntityResolver:
     Manages alias storage in Supabase.
     """
     def __init__(self):
-        url = os.getenv("SUPABASE_URL")
-        key = os.getenv("SUPABASE_SERVICE_KEY")
-        if not url or not key:
+        self.url = os.getenv("SUPABASE_URL")
+        self.key = os.getenv("SUPABASE_SERVICE_KEY")
+        if not self.url or not self.key:
             raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set")
         
-        self.client = create_async_client(url, key)
+        self._client: Optional[Client] = None
+
+    async def _get_client(self) -> Client:
+        """Lazy init for async client."""
+        if self._client is None:
+            self._client = await create_async_client(self.url, self.key)
+        return self._client
 
     async def resolve(self, raw_handle: str) -> Dict[str, Any]:
         """
@@ -28,10 +34,11 @@ class EntityResolver:
         3. Create new entity if not found (optimistic).
         """
         raw_handle = raw_handle.strip()
+        client = await self._get_client()
         
         # 1. Search by canonical name
         try:
-            res = await self.client.table("entities")\
+            res = await client.table("entities")\
                 .select("*")\
                 .eq("canonical_name", raw_handle)\
                 .execute()
@@ -44,7 +51,7 @@ class EntityResolver:
         # 2. Search by alias containment
         # JSONB contains check: aliases @> '["handle"]'
         try:
-            res = await self.client.table("entities")\
+            res = await client.table("entities")\
                 .select("*")\
                 .contains("aliases", f'["{raw_handle}"]')\
                 .execute()
@@ -63,7 +70,7 @@ class EntityResolver:
         }
         
         try:
-            res = await self.client.table("entities")\
+            res = await client.table("entities")\
                 .insert(new_entity)\
                 .execute()
             
@@ -74,7 +81,7 @@ class EntityResolver:
             # Handle race condition where entity was created between search and insert
             logger.warning(f"Failed to create entity '{raw_handle}', retrying fetch: {e}")
             try:
-                res = await self.client.table("entities")\
+                res = await client.table("entities")\
                     .select("*")\
                     .eq("canonical_name", raw_handle)\
                     .execute()
@@ -93,8 +100,9 @@ class EntityResolver:
 
     async def get_by_id(self, entity_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve entity by UUID."""
+        client = await self._get_client()
         try:
-            res = await self.client.table("entities")\
+            res = await client.table("entities")\
                 .select("*")\
                 .eq("id", entity_id)\
                 .single()\
@@ -103,4 +111,3 @@ class EntityResolver:
         except Exception as e:
             logger.error(f"Error retrieving entity {entity_id}: {e}")
             return None
-
