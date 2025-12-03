@@ -36,6 +36,7 @@ RULES:
 2. Never store what LLMs already know (general coding, syntax, etc.)
 3. Store user-specific preferences, project-specific patterns, error lessons
 4. Be extremely selective — memory is precious
+5. PREFER SEMANTIC OVER EPISODIC: If a user asks "how to be smart", store "User values self-improvement/intelligence" (Semantic) rather than "User asked how to be smart" (Episodic). Extract the *trait* or *intent*.
 
 Respond ONLY with valid JSON:
 {{

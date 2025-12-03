@@ -31,6 +31,10 @@ Create a search plan. Consider:
 - Agent expertise needed
 - Keywords to search
 
+CRITICAL FOR CONVERSATIONAL QUERIES:
+- If the user asks about "last message", "previous", "repeat", or "history", you MUST prioritize 'working' and 'episodic' tiers with high limits.
+- Set 'time_range_days' to 1 for immediate recall tasks.
+
 Respond ONLY with valid JSON:
 {{
     "tiers": ["episodic", "lineage"],  // which tiers to search, in priority order
