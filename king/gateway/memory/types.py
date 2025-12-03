@@ -15,6 +15,13 @@ class MemoryType(str, Enum):
     WORKING = "working"
 
 
+class EntityType(str, Enum):
+    HUMAN = "Human"
+    AI = "AI"
+    ORGANIZATION = "Organization"
+    SYSTEM = "System"
+
+
 MEMORY_RESOLUTION_ORDER = [
     MemoryType.WORKING,
     MemoryType.EPISODIC,
