@@ -9,6 +9,7 @@ from .types import Memory, MemoryType, MemorySearchResult, MEMORY_RESOLUTION_ORD
 from .seeding import get_collective_memories, get_lineage_memories
 from .decay import apply_decay_to_memories, filter_expired_memories
 from .curator import create_search_plan
+from .entity_resolver import EntityResolver
 
 logger = logging.getLogger(__name__)
 
@@ -17,12 +18,14 @@ class MemoryResolver:
     Resolves memories across all tiers with inheritance.
     """
     
-    def __init__(self, mem0_client=None):
+    def __init__(self, mem0_client=None, entity_resolver: Optional[EntityResolver] = None):
         """
         Args:
             mem0_client: Mem0 client for searching episodic/semantic memories
+            entity_resolver: Optional resolver for normalizing entity handles
         """
         self.mem0_client = mem0_client
+        self.entity_resolver = entity_resolver
         self._collective_cache: Optional[List[Memory]] = None
         self._lineage_cache: Dict[str, List[Memory]] = {}
     
@@ -32,7 +35,8 @@ class MemoryResolver:
         user_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         session_id: Optional[str] = None,
-        working_memories: Optional[List[Memory]] = None
+        working_memories: Optional[List[Memory]] = None,
+        resolve_entity: bool = False
     ) -> MemorySearchResult:
         """
         Resolve memories using AI-generated plan.
@@ -40,10 +44,20 @@ class MemoryResolver:
         start_time = time.time()
         result = MemorySearchResult()
         
+        canonical_user_id = user_id
+        if resolve_entity and user_id and self.entity_resolver:
+            try:
+                entity = await self.entity_resolver.resolve(user_id)
+                if entity and "id" in entity:
+                    canonical_user_id = str(entity["id"])
+                    logger.info(f"Resolved user '{user_id}' to entity '{canonical_user_id}'")
+            except Exception as e:
+                logger.error(f"Entity resolution failed for '{user_id}': {e}")
+
         # AI decides search strategy
         plan = await create_search_plan(
             query=query, 
-            user_id=user_id, 
+            user_id=canonical_user_id, 
             agent_name=agent_id or "unknown",
             session_context={"session_id": session_id}
         )
@@ -59,7 +73,7 @@ class MemoryResolver:
         
         # SECURITY FIX: Always enforce the authenticated user_id. 
         # Ignore any user_id suggested by the AI curator to prevent data leakage.
-        filters["user_id"] = user_id 
+        filters["user_id"] = canonical_user_id 
         
         search_keywords = filters.get("keywords", [])
         search_query = f"{query} {' '.join(search_keywords)}" if search_keywords else query
@@ -75,7 +89,7 @@ class MemoryResolver:
             tier_memories = self._search_tier(
                 mem_type, 
                 search_query, 
-                user_id, 
+                canonical_user_id, 
                 agent_id, 
                 session_id,
                 working_memories, 
