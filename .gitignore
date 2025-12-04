@@ -8,14 +8,37 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+.pytest_cache/
+.mypy_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
 
 # Temp files
 temp_url.txt
 *.ps1
 .augment/
+*.tmp
+*.temp
+*.bak
+*.log
 
 # Supabase temp files
 supabase/.temp/
 
 # Test artifacts
 tests/king llm call/
+
+# Node
+node_modules/
+
+# Local settings
+.claude/settings.local.json
