@@ -1,8 +1,30 @@
 #!/bin/bash
+#
+# KING Stack Deployment Script
+# ============================
+#
+# ⚠️  CRITICAL: Run this script from the king/ directory!
+#
+#     cd king
+#     ./deploy.sh
+#
+# DO NOT run `gcloud run deploy --source .` from repository root.
+# The root package.json causes Cloud Buildpacks to misdetect as Node.js
+# and fail with: "Cannot find module '/workspace/index.js'"
+#
+# Each --source flag must point to a directory containing a Dockerfile.
+#
 
 # Configuration
 PROJECT_ID="gen-lang-client-0695295266"
 REGION="us-central1"
+
+# Verify we're in the right directory
+if [ ! -f "./gateway/Dockerfile" ]; then
+    echo "❌ ERROR: Must run from king/ directory"
+    echo "   cd king && ./deploy.sh"
+    exit 1
+fi
 
 echo "👑 Deploying KING Stack to Google Cloud Run..."
 
@@ -13,6 +35,7 @@ gcloud run deploy king-gateway \
   --region $REGION \
   --project $PROJECT_ID \
   --allow-unauthenticated \
+  --clear-base-image \
   --set-secrets "SUPABASE_URL=SUPABASE_URL:latest,SUPABASE_SERVICE_KEY=SUPABASE_SERVICE_KEY:latest,MEM0_API_KEY=MEM0_API_KEY:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest"
 
 GATEWAY_URL=$(gcloud run services describe king-gateway --region $REGION --format 'value(status.url)')

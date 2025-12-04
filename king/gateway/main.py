@@ -12,20 +12,63 @@ from memory import MemoryResolver, EntityResolver
 from memory.reflection import reflect_on_run
 from agent_factory import spawn_agent, smart_spawn, EphemeralAgent
 import asyncio
+import logging
 
-app = FastAPI(title="KING Gateway", version="1.3.0")
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="KING Gateway", version="2.0.0")
 state_manager = StateManager()
 
-# Initialize Mem0 client and Memory Resolver
-mem0_api_key = os.getenv("MEM0_API_KEY")
-if not mem0_api_key:
-    print("Warning: MEM0_API_KEY is not set. Memory functions will be disabled.")
-    mem0_client = None
-else:
-    mem0_client = MemoryClient(api_key=mem0_api_key)
+# Orchestrator URL (king-orchestrator service)
+ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL", "")
+ORCHESTRATOR_TIMEOUT = 30.0
 
-entity_resolver = EntityResolver()
-memory_resolver = MemoryResolver(mem0_client=mem0_client, entity_resolver=entity_resolver)
+# Lazy initialization to avoid import-time failures
+_mem0_client = None
+_entity_resolver = None
+_memory_resolver = None
+
+
+def _get_mem0_client():
+    """Lazy init for Mem0 client."""
+    global _mem0_client
+    if _mem0_client is None:
+        mem0_api_key = os.getenv("MEM0_API_KEY")
+        if mem0_api_key:
+            try:
+                _mem0_client = MemoryClient(api_key=mem0_api_key.strip())
+            except Exception as e:
+                print(f"Warning: Failed to init Mem0 client: {e}")
+                _mem0_client = False
+        else:
+            print("Warning: MEM0_API_KEY is not set. Memory functions will be disabled.")
+            _mem0_client = False
+    return _mem0_client if _mem0_client else None
+
+
+def _get_entity_resolver():
+    """Lazy init for EntityResolver."""
+    global _entity_resolver
+    if _entity_resolver is None:
+        try:
+            _entity_resolver = EntityResolver()
+        except Exception as e:
+            print(f"Warning: Failed to init EntityResolver: {e}")
+            _entity_resolver = False
+    return _entity_resolver if _entity_resolver else None
+
+
+def _get_memory_resolver():
+    """Lazy init for MemoryResolver."""
+    global _memory_resolver
+    if _memory_resolver is None:
+        mem0 = _get_mem0_client()
+        entity = _get_entity_resolver()
+        if mem0 and entity:
+            _memory_resolver = MemoryResolver(mem0_client=mem0, entity_resolver=entity)
+        else:
+            _memory_resolver = False
+    return _memory_resolver if _memory_resolver else None
 
 class ExecuteRequest(BaseModel):
     agent_name: str
@@ -93,14 +136,15 @@ async def execute_agent(agent_name: str, request: ExecuteRequest):
     enriched_input = request.input_data.copy()
 
     # 1. Hierarchical Memory Search
-    if user_id and agent_name != "memory_selector":
+    memory_resolver = _get_memory_resolver()
+    if user_id and agent_name != "memory_selector" and memory_resolver:
         query = enriched_input.get("query") or str(enriched_input)
-        
+
         # Use the resolver for multi-tier search (async call)
         memory_results = await memory_resolver.resolve(
-            query=query, 
-            user_id=user_id, 
-            agent_id=agent_name, 
+            query=query,
+            user_id=user_id,
+            agent_id=agent_name,
             session_id=session_id,
             resolve_entity=True # Enable entity resolution
         )
@@ -153,6 +197,7 @@ async def execute_agent(agent_name: str, request: ExecuteRequest):
         )
         
         # 4. Add result to Mem0 (Episodic Memory)
+        mem0_client = _get_mem0_client()
         if user_id and success and mem0_client:
             try:
                 # Store structured episodic memory
@@ -225,48 +270,134 @@ async def run_pipeline(request: PipelineRequest):
     return {"success": True, "results": results}
 
 
+async def _call_orchestrator_decide(user_id: str, message: str, session_id: str = None, context: dict = None) -> dict:
+    """Call orchestrator /king/decide endpoint for strategic decision."""
+    if not ORCHESTRATOR_URL:
+        return None  # Fallback to local smart_spawn
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                f"{ORCHESTRATOR_URL}/king/decide",
+                json={
+                    "user_id": user_id or "anonymous",
+                    "message": message,
+                    "session_id": session_id,
+                    "context": context
+                },
+                timeout=ORCHESTRATOR_TIMEOUT
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Orchestrator call failed: {e}")
+            return None  # Fallback to local
+
+
+async def _execute_verdict(verdict: dict, enriched_input: dict) -> dict:
+    """Execute the orchestrator's verdict."""
+    agent_type = verdict.get("agent_type")
+    agent_name = verdict.get("agent_name")
+
+    if agent_type == "registered":
+        service_url = verdict.get("service_url")
+        if service_url:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(f"{service_url}/execute", json=enriched_input, timeout=60)
+                return resp.json()
+        # Fallback: try via state_manager
+        return await _call_agent_service(agent_name, enriched_input)
+
+    elif agent_type == "pipeline":
+        pipeline_steps = verdict.get("pipeline_steps", [])
+        return await run_pipeline(PipelineRequest(steps=pipeline_steps, initial_input=enriched_input))
+
+    elif agent_type == "ephemeral":
+        # Spawn ephemeral agent locally (fallback path)
+        spec = verdict.get("spec", {})
+        result = await smart_spawn(
+            task_description=spec.get("task", ""),
+            input_data=enriched_input,
+            user_context=spec.get("memory_context")
+        )
+        return result.get("output", {})
+
+    return {"error": f"Unknown agent_type: {agent_type}"}
+
+
 @app.post("/spawn")
 async def spawn_and_execute(request: SpawnRequest):
     """
-    KING's brain: Smart routing for agent tasks.
-    - Reuses existing agents when possible
-    - Spawns new agents when needed
-    - Coordinates teams for complex tasks
+    KING Gateway: Delegates strategic decisions to orchestrator.
+
+    Flow:
+    1. Call orchestrator /king/decide for strategic decision
+    2. If blocked → return immediately
+    3. Execute verdict (registered/pipeline/ephemeral)
+    4. Log + reflect
+
+    Fallback: If orchestrator unreachable, use local smart_spawn
     """
     start_time = time.time()
     user_id = request.input_data.get("user_id")
+    session_id = request.input_data.get("session_id")
 
-    # 1. SMART SPAWN: AI decides reuse/spawn/team
-    result = await smart_spawn(
-        task_description=request.task_description,
-        input_data=request.input_data,
-        user_context=request.user_context
+    # === Step 1: Call Orchestrator for Decision ===
+    orchestrator_response = await _call_orchestrator_decide(
+        user_id=user_id,
+        message=request.task_description,
+        session_id=session_id,
+        context=request.user_context
     )
 
-    decision = result.get("decision", "spawned")
-    agent_spec = result.get("agent_spec", {})
-    output = result.get("output", {})
-    reasoning = result.get("reasoning", "")
+    # === Step 2: Handle Orchestrator Response or Fallback ===
+    if orchestrator_response:
+        action = orchestrator_response.get("action")
+        trace_id = orchestrator_response.get("trace_id", "unknown")
+        reasoning = orchestrator_response.get("reasoning", "")
 
-    # Handle different decision types
-    if decision == "team":
-        team_results = result.get("team_results", [])
-        success = bool(output)
-        agent_name = "team_coordinator"
-    elif decision in ("system", "memory"):
-        # System queries (list agents, memory) - no agent spawned
-        team_results = None
-        success = True
-        agent_name = agent_spec.get("agent_name", decision)
+        # BLOCKED by Guardian
+        if action == "blocked":
+            return {
+                "decision": "blocked",
+                "reasoning": reasoning,
+                "agent_spec": None,
+                "output": {"error": reasoning},
+                "success": False,
+                "trace_id": trace_id,
+                "duration_ms": int((time.time() - start_time) * 1000)
+            }
+
+        verdict = orchestrator_response.get("verdict")
+        enriched_input = orchestrator_response.get("enriched_input", request.input_data)
+
+        # Execute verdict
+        output = await _execute_verdict(verdict, enriched_input)
+        decision = verdict.get("agent_type", "unknown")
+        agent_name = verdict.get("agent_name", "unknown")
+        agent_spec = verdict
+
     else:
-        success = isinstance(output, dict) and ("error" not in output or output.get("confidence", 0) > 0)
+        # Fallback: local smart_spawn (orchestrator unreachable)
+        logger.warning("Orchestrator unreachable, using local smart_spawn")
+        result = await smart_spawn(
+            task_description=request.task_description,
+            input_data=request.input_data,
+            user_context=request.user_context
+        )
+        decision = result.get("decision", "spawned")
+        agent_spec = result.get("agent_spec", {})
+        output = result.get("output", {})
+        reasoning = result.get("reasoning", "")
         agent_name = agent_spec.get("agent_name", "unknown") if isinstance(agent_spec, dict) else "unknown"
-        team_results = None
+        trace_id = "local"
 
-    duration_ms = int((time.time() - start_time) * 1000)
+    # === Step 3: Determine Success ===
+    success = isinstance(output, dict) and "error" not in output
     error_msg = output.get("error") if isinstance(output, dict) else None
+    duration_ms = int((time.time() - start_time) * 1000)
 
-    # 2. Log execution
+    # === Step 4: Log Execution ===
     state_manager.log_run(
         agent_name=f"{decision}:{agent_name}",
         input_data=request.input_data,
@@ -276,24 +407,24 @@ async def spawn_and_execute(request: SpawnRequest):
         duration_ms=duration_ms
     )
 
-    # 3. Persist agent if requested and successful (only for spawned)
+    # === Step 5: Persist if Requested ===
     persisted = False
-    if request.persist and success and decision == "spawned" and isinstance(agent_spec, dict):
+    if request.persist and success and decision == "ephemeral" and isinstance(agent_spec, dict):
         client = state_manager.get_client()
         if client:
             try:
                 client.table("agent_specs").upsert({
                     "agent_name": agent_spec.get("agent_name"),
-                    "purpose": agent_spec.get("purpose"),
-                    "dna_rules": agent_spec.get("dna_rules"),
-                    "output_schema": agent_spec.get("output_schema"),
+                    "purpose": agent_spec.get("purpose", ""),
+                    "dna_rules": agent_spec.get("dna_rules", []),
+                    "output_schema": agent_spec.get("output_schema", {}),
                     "version": "spawned-1.0"
                 }).execute()
                 persisted = True
             except Exception as e:
-                print(f"Failed to persist agent: {e}")
+                logger.error(f"Failed to persist agent: {e}")
 
-    # 4. Self-reflection
+    # === Step 6: Self-reflection (non-blocking) ===
     asyncio.create_task(
         reflect_on_run(
             agent_name=f"{decision}:{agent_name}",
@@ -308,11 +439,11 @@ async def spawn_and_execute(request: SpawnRequest):
 
     return {
         "decision": decision,
-        "reasoning": reasoning,
+        "reasoning": reasoning if 'reasoning' in dir() else "",
         "agent_spec": agent_spec,
-        "team_results": team_results,
         "output": output,
         "success": success,
         "persisted": persisted,
+        "trace_id": trace_id if 'trace_id' in dir() else "local",
         "duration_ms": duration_ms
     }

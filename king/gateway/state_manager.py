@@ -108,12 +108,11 @@ class StateManager:
 
         try:
             payload = {
-                "agent_name": agent_name,
-                "input": input_data,
-                "output": output_data,
-                "success": success,
-                "error": error,
-                "duration_ms": duration_ms
+                "agent_role": agent_name,  # DB column is agent_role, not agent_name
+                "input_json": input_data,  # DB column is input_json, not input
+                "output_json": output_data,  # DB column is output_json, not output
+                "confidence": output_data.get("confidence") if isinstance(output_data, dict) else None
+                # Note: success, error, duration_ms not in original schema - omitted
             }
             # Fire and forget (in a real app, maybe use background task)
             threading.Thread(target=lambda: client.table("agent_runs").insert(payload).execute()).start()

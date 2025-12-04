@@ -1,39 +1,111 @@
-# KING MVP (Microservices Architecture)
+# KING — Kingdom Intelligence Nexus Gateway
 
-This directory contains the experimental microservices implementation of the Kingdom Intelligence Nexus Gateway.
+**Status:** Production (Phase 1 Complete)
+**Last Updated:** 2025-12-04
 
-## Architecture
+---
 
-- **Gateway** (Port 8000): Thin orchestrator handling routing and state.
-- **Code Writer** (Port 8001): Agent service for generating code.
-- **Code Reviewer** (Port 8002): Agent service for reviewing code.
-- **Video Planner** (Port 8003): Agent service for planning video content.
-- **Script Writer** (Port 8004): Agent service for writing scripts.
+## ⚠️ CRITICAL: Cloud Run Deployment Rules
 
-## Prerequisites
+> **DO NOT** run `gcloud run deploy --source .` from repository root (`ai-ecosystem/`).
+> This causes Cloud Buildpacks to misdetect the project type and fail.
 
-1. **Supabase**: Apply the migration `supabase/migrations/20251202_king_registry.sql` to your Supabase project.
-2. **Environment**: Create a `.env` file in this directory based on `.env.example`.
+### Why This Fails
 
-## Running the Stack
+The repository root contains `package.json` (for supabase CLI). When you deploy from root:
+1. Cloud Run finds no Dockerfile → uses Buildpacks auto-detection
+2. Buildpacks sees `package.json` → assumes Node.js project
+3. Expects `index.js` entry point → **container crashes immediately**
+4. Error: `Cannot find module '/workspace/index.js'`
+
+### Correct Deployment
+
+**Always specify the service directory containing the Dockerfile:**
 
 ```bash
-# Start all services
+# From repo root - CORRECT
+gcloud run deploy king-gateway --source ./king/gateway --region us-central1
+
+# From king/ directory - CORRECT
+cd king
+gcloud run deploy king-gateway --source ./gateway --region us-central1
+
+# From repo root - WRONG ❌
+gcloud run deploy king-gateway --source . --region us-central1
+```
+
+---
+
+## Documentation
+
+| Document | Purpose |
+|----------|---------|
+| [docs/INDEX.md](../docs/INDEX.md) | Master documentation index |
+| [docs/CONSTITUTION.md](../docs/CONSTITUTION.md) | Supreme law of the Kingdom |
+| [docs/CURRENT_STATE.md](../docs/CURRENT_STATE.md) | Live deployment status |
+| [docs/TODO.md](../docs/TODO.md) | Active task list |
+| [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) | System diagrams |
+
+---
+
+## Quick Reference
+
+### Live Services
+
+| Service | Endpoint |
+|---------|----------|
+| Gateway | https://king-gateway-250524159533.us-central1.run.app |
+| Orchestrator | https://king-orchestrator-d3zysgasgq-uc.a.run.app |
+
+### Deploy a Service
+
+```bash
+# MUST run from king/ directory
+cd king
+gcloud run deploy king-{service} --source ./{service} --region us-central1 --allow-unauthenticated --set-secrets "..."
+
+# OR specify full path from repo root
+gcloud run deploy king-gateway --source ./king/gateway --region us-central1 --allow-unauthenticated
+```
+
+### Test E2E Flow
+
+```bash
+curl -X POST "https://king-gateway-d3zysgasgq-uc.a.run.app/spawn" \
+  -H "Content-Type: application/json" \
+  -d '{"task_description": "hello", "input_data": {"user_id": "test"}}'
+```
+
+---
+
+## Directory Structure
+
+```
+king/
+├── gateway/           # Thin ingress layer
+├── orchestrator/      # Strategic brain
+├── services/          # Independent agent services
+│   ├── code-writer/
+│   ├── code-reviewer/
+│   ├── video-planner/
+│   ├── script-writer/
+│   └── memory-selector/
+└── telegram-bot/      # Telegram interface
+```
+
+---
+
+## Local Development
+
+```bash
+# Start all services locally
 docker-compose up --build
 
 # Verify Gateway
 curl http://localhost:8000/health
-
-# List Agents
-curl http://localhost:8000/agents/list
 ```
 
-## Testing an Agent
+---
 
-```bash
-# Execute Code Writer via Gateway
-curl -X POST http://localhost:8000/execute/code_writer \
-  -H "Content-Type: application/json" \
-  -d '{"agent_name": "code_writer", "input_data": {"task": "Write a python fibonacci function", "language": "python"}}'
-```
+*See [docs/INDEX.md](../docs/INDEX.md) for complete documentation.*
 

@@ -12,7 +12,7 @@ from .decay import calculate_importance
 from .resolver import MemoryResolver
 from .curator import create_search_plan
 from .entity_resolver import EntityResolver
-from .schemas import MemoryCreate, MemoryResponse, EntityCreate, EntityResponse
+from .schema import MemoryRecord, validate_memory
 
 __all__ = [
     "Memory",
@@ -28,8 +28,6 @@ __all__ = [
     "MemoryResolver",
     "create_search_plan",
     "EntityResolver",
-    "MemoryCreate",
-    "MemoryResponse",
-    "EntityCreate",
-    "EntityResponse",
+    "MemoryRecord",
+    "validate_memory",
 ]

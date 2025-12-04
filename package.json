@@ -1,5 +1,10 @@
 {
+  "private": true,
+  "description": "Root package for Supabase CLI only. NOT a Node.js application. See king/ for deployable services.",
   "devDependencies": {
     "supabase": "^2.62.5"
+  },
+  "comments": {
+    "warning": "DO NOT run 'gcloud run deploy --source .' from this directory. Cloud Buildpacks will misdetect as Node.js and fail. Deploy from king/ subdirectories instead."
   }
 }

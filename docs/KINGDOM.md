@@ -1,9 +1,17 @@
 ## KINGDOM.md - Dynamic Agent Creation Architecture
 
-**Document Status:** Living Document - Update After Every Implementation  
-**Last Updated:** 2025-11-28  
-**Owned By:** Core Development Team  
+**Document Status:** Living Document - Update After Every Implementation
+**Last Updated:** 2025-12-03
+**Owned By:** Core Development Team
 **Review Frequency:** After Each Kingdom Feature Ship
+
+> **See Also:**
+> - [CONSTITUTION.md](./CONSTITUTION.md) — Supreme law of the Kingdom
+> - [CURRENT_STATE.md](./CURRENT_STATE.md) — Live deployment status
+> - [TODO.md](./TODO.md) — Active task list
+> - [ARCHITECTURE.md](./ARCHITECTURE.md) — System diagrams
+> - [KINGDOM_HISTORY.md](./KINGDOM_HISTORY.md) — Historical evolution
+> - [DISCUSSIONS.md](./DISCUSSIONS.md) — Decision log
 
 ***
 

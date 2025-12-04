@@ -1,1 +1,21 @@
 /.env
+.env
+.env.yaml
+*.env.yaml
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Temp files
+temp_url.txt
+*.ps1
+.augment/
+
+# Supabase temp files
+supabase/.temp/
+
+# Test artifacts
+tests/king llm call/
